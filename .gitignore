@@ -1,0 +1,10 @@
+.DS_Store
+
+# generated files
+.vscode/c_cpp_properties.json
+
+# compiled output
+build/
+
+*.o
+

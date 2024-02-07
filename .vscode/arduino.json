@@ -1,0 +1,7 @@
+{
+    "sketch": "src/src.ino",
+    "configuration": "cpu=atmega328",
+    "board": "arduino:avr:nano",
+    "programmer": "arduinoisp",
+    "output": "build"
+}
