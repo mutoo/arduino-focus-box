@@ -1,7 +1,8 @@
 {
-    "sketch": "src/src.ino",
+    "sketch": "arduino-focus-box.ino",
     "configuration": "cpu=atmega328",
     "board": "arduino:avr:nano",
     "programmer": "arduinoisp",
-    "output": "build"
+    "output": "build",
+    "port": "/dev/tty.usbserial-14640"
 }

@@ -1,5 +1,14 @@
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
+#include <EEPROMWearLevel.h>
+
+// please update the layout version if more variables are added
+#define EEPROM_LAYOUT_VERSION 0
+// currently we have only two values, 0 for sec, 1 for min
+#define AMOUNT_OF_INDEXES 2
+
+#define INDEX_CONFIGURATION_SEC 0
+#define INDEX_CONFIGURATION_MIN 1
 
 // #define DEBUG
 
@@ -26,15 +35,17 @@ char time[6];
 char remaingTime[6];
 
 // FSM
-// 0 - check locked;
-// 1 - set timer;
-// 2 - prepare;
-// 3 - countdown;
-// 4 - time's up;
-// 5 - unlock;
-// 6 - retry;
+#define STATE_CHECK_LOCKED 0
+#define STATE_READ_TIMER 1
+#define STATE_SET_TIMER 2
+#define STATE_PREPARE 3
+#define STATE_COUNTDOWN 4
+#define STATE_TIMES_UP 5
+#define STATE_UNLOCK 6
+#define STATE_RETRY 7
+#define STATE_ERROR 8
 // else - error;
-int state = 0;
+int state = STATE_CHECK_LOCKED;
 long targetTimeMS = 0;
 int min, sec, rCol, buzzerIdx, attampt;
 const int maxRetry = 5;
@@ -47,6 +58,10 @@ void setup()
 #ifdef DEBUG
     Serial.begin(9600);
 #endif
+
+    // setup eeprom
+    EEPROMwl.begin(EEPROM_LAYOUT_VERSION, AMOUNT_OF_INDEXES);
+
     // setup rotray encoder
     pinMode(rotDtPin, INPUT_PULLUP);
     pinMode(rotBtnPin, INPUT_PULLUP);
@@ -118,7 +133,7 @@ int readValue(int pos, int min, int max)
 
 void loop()
 {
-    if (state == 0)
+    if (state == STATE_CHECK_LOCKED)
     {
         bool isLocked = digitalRead(lockStatePin) == LOW;
         if (isLocked)
@@ -126,7 +141,7 @@ void loop()
             lcd.clear();
             lcd.setCursor(0, 0);
             lcd.blink();
-            state = 1;
+            state = STATE_READ_TIMER;
         }
         else
         {
@@ -137,7 +152,23 @@ void loop()
         }
         delay(200);
     }
-    else if (state == 1)
+    else if (state == STATE_READ_TIMER)
+    { // read timer from eeprom
+        sec = EEPROMwl.read(INDEX_CONFIGURATION_SEC);
+        min = EEPROMwl.read(INDEX_CONFIGURATION_MIN);
+        if (sec != 0 || min != 0)
+        {
+            sec = sec % 60;
+            min = min % 60;
+            lcd.clear();
+            lcd.noBlink();
+            state = STATE_PREPARE;
+        } else {
+            state = STATE_SET_TIMER;
+        }
+
+    }
+    else if (state == STATE_SET_TIMER)
     { // set timer
         min = readValue(POS_MIN, 0, 59);
         sec = readValue(POS_SEC, 0, 59);
@@ -172,7 +203,10 @@ void loop()
             {
                 lcd.clear();
                 lcd.noBlink();
-                state = 2;
+                // save the timer to eeprom
+                EEPROMwl.write(INDEX_CONFIGURATION_SEC, sec);
+                EEPROMwl.write(INDEX_CONFIGURATION_MIN, min);
+                state = STATE_PREPARE;
             }
             else
             {
@@ -181,7 +215,7 @@ void loop()
         }
         rotBtnPrevPressed = rotBtnCurrentPressed;
     }
-    else if (state == 2)
+    else if (state == STATE_PREPARE)
     { // prepare
         lcd.setCursor(0, 0);
         lcd.print("Starting...");
@@ -209,9 +243,9 @@ void loop()
         lcd.print("Counting down...");
         targetTimeMS = currentMS + durationMS;
         rCol = 0;
-        state = 3;
+        state = STATE_COUNTDOWN;
     }
-    else if (state == 3)
+    else if (state == STATE_COUNTDOWN)
     { // counting down
         long diffMS = targetTimeMS - millis();
 
@@ -265,14 +299,31 @@ void loop()
             lcd.print("Time's up,");
             lcd.setCursor(0, 1);
             lcd.print("Click to unlock!");
-            state = 4;
+            state = STATE_TIMES_UP;
         }
         else
         {
+            if (rSec % 10 == 0)
+            {
+                // save the timer to eeprom every 10 seconds
+                EEPROMwl.write(INDEX_CONFIGURATION_SEC, rSec);
+                EEPROMwl.write(INDEX_CONFIGURATION_MIN, rMin);
+            }
+
+            bool isLocked = digitalRead(lockStatePin) == LOW;
+            if (!isLocked)
+            {
+                // the lock is forced to open
+                // clear the timer in the eeprom
+                EEPROMwl.write(INDEX_CONFIGURATION_SEC, 0);
+                EEPROMwl.write(INDEX_CONFIGURATION_MIN, 0);
+                state = STATE_CHECK_LOCKED;
+            }
+
             delay(delayMS);
         }
     }
-    else if (state == 4)
+    else if (state == STATE_TIMES_UP)
     { // time's up
         delay(100);
 
@@ -282,11 +333,11 @@ void loop()
             lcd.clear();
             lcd.setCursor(0, 0);
             lcd.print("Unlocking...");
-            state = 5;
+            state = STATE_UNLOCK;
             attampt = 0;
         }
     }
-    else if (state == 5)
+    else if (state == STATE_UNLOCK)
     { // unlocking
         attampt = attampt + 1;
         digitalWrite(lockTriggerPin, HIGH);
@@ -298,7 +349,10 @@ void loop()
         {
             lcd.clear();
             lcd.setCursor(0, 0);
-            state = 0;
+            // clear the timer in the eeprom
+            EEPROMwl.write(INDEX_CONFIGURATION_SEC, 0);
+            EEPROMwl.write(INDEX_CONFIGURATION_MIN, 0);
+            state = STATE_CHECK_LOCKED;
         }
         else if (attampt <= maxRetry)
         {
@@ -311,14 +365,14 @@ void loop()
             lcd.print("),");
             lcd.setCursor(0, 1);
             lcd.print("Click to unlock!");
-            state = 6;
+            state = STATE_RETRY;
         }
         else
         {
-            state = 7;
+            state = STATE_ERROR;
         }
     }
-    else if (state == 6)
+    else if (state == STATE_RETRY)
     {
         delay(100);
         int act = digitalRead(rotBtnPin);
@@ -327,11 +381,11 @@ void loop()
             lcd.clear();
             lcd.setCursor(0, 0);
             lcd.print("Unlocking...");
-            state = 5;
+            state = STATE_UNLOCK;
         }
     }
     else
-    {
+    { // error
         lcd.clear();
         lcd.print("Error occurs,");
         lcd.setCursor(0, 1);
