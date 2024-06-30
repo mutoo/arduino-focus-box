@@ -9,6 +9,7 @@
 
 #define INDEX_CONFIGURATION_SEC 0
 #define INDEX_CONFIGURATION_MIN 1
+#define BACKLIGHT_TURNOFF_TIME_SEC 5
 
 // #define DEBUG
 
@@ -92,6 +93,25 @@ void setup()
     state = 0;
 }
 
+long backLightRefreshTimeMS = 0;
+bool hasInteracted = false;
+
+int rotBtnVal = -1;
+int rotClkVal = -1;
+int rotDtVal = -1;
+
+void readRotVal() {
+    int btn = digitalRead(rotBtnPin);
+    int clk = digitalRead(rotClkPin);
+    int dt = digitalRead(rotDtPin);
+    if (rotBtnVal != btn || rotClkVal != clk || rotDtVal != dt) {
+        hasInteracted = true;
+    }
+    rotBtnVal = btn;
+    rotClkVal = clk;
+    rotDtVal = dt;
+}
+
 void updateRotVal()
 {
     delayMicroseconds(1000); // bypass some noise
@@ -133,6 +153,23 @@ int readValue(int pos, int min, int max)
 
 void loop()
 {
+    readRotVal();
+    if (backLightRefreshTimeMS > 0)
+    {
+        long currentMS = millis();
+        long diffMS = currentMS - backLightRefreshTimeMS;
+        if (diffMS >= BACKLIGHT_TURNOFF_TIME_SEC * 1000)
+        {
+            backLightRefreshTimeMS = 0;
+            lcd.noBacklight();
+        }
+    }
+    if (hasInteracted) {
+        hasInteracted = false;
+        lcd.backlight();
+        backLightRefreshTimeMS = millis();
+    }
+
     if (state == STATE_CHECK_LOCKED)
     {
         bool isLocked = digitalRead(lockStatePin) == LOW;
@@ -170,7 +207,7 @@ void loop()
     }
     else if (state == STATE_SET_TIMER)
     { // set timer
-        min = readValue(POS_MIN, 0, 59);
+                        min = readValue(POS_MIN, 0, 59);
         sec = readValue(POS_SEC, 0, 59);
         sprintf(time, "%02d:%02d", min, sec);
 #ifdef DEBUG
@@ -196,7 +233,7 @@ void loop()
         {
             rotBtnPressedStartTime = millis();
         }
-        if (rotBtnPrevPressed && !rotBtnCurrentPressed)
+        if (rotBtnPrevPressed)
         {
             unsigned long currentTime = millis();
             if (currentTime - rotBtnPressedStartTime >= 800)
