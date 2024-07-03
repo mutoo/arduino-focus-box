@@ -24,8 +24,6 @@ int prevClk = 1;
 int dt[2] = {0, 0};
 int tVal[2] = {0, 0};
 int currentPos = 0;
-bool rotBtnPrevPressed = false;
-unsigned long rotBtnPressedStartTime;
 
 // lock
 const int lockTriggerPin = 12;
@@ -96,11 +94,12 @@ void setup()
 long backLightRefreshTimeMS = 0;
 bool hasInteracted = false;
 
-int rotBtnVal = -1;
-int rotClkVal = -1;
-int rotDtVal = -1;
+int rotBtnVal = digitalRead(rotBtnPin);
+int rotClkVal = digitalRead(rotClkPin);
+int rotDtVal = digitalRead(rotDtPin);
 
-void readRotVal() {
+void trackRotValChange() 
+{
     int btn = digitalRead(rotBtnPin);
     int clk = digitalRead(rotClkPin);
     int dt = digitalRead(rotDtPin);
@@ -110,6 +109,25 @@ void readRotVal() {
     rotBtnVal = btn;
     rotClkVal = clk;
     rotDtVal = dt;
+}
+
+void toggleBacklight()
+{
+    if (backLightRefreshTimeMS > 0)
+    {
+        long currentMS = millis();
+        long diffMS = currentMS - backLightRefreshTimeMS;
+        if (diffMS >= BACKLIGHT_TURNOFF_TIME_SEC * 1000)
+        {
+            backLightRefreshTimeMS = 0;
+            lcd.noBacklight();
+        }
+    }
+    if (hasInteracted) {
+        hasInteracted = false;
+        lcd.backlight();
+        backLightRefreshTimeMS = millis();
+    }
 }
 
 void updateRotVal()
@@ -129,6 +147,39 @@ void updateRotVal()
         dt[currentPos] += dtVal == HIGH ? -1 : 1;
     }
     prevClk = clk;
+}
+
+unsigned long rotBtnPressedStartTime = millis();
+bool rotBtnDown = false;
+bool rotBtnLongPress = false;
+bool rotBtnDbClk = false;
+
+void readRotBtn()
+{
+    bool isDown = rotBtnVal == LOW;
+    bool longPress = false;
+    bool dbClk = false;
+    unsigned long currentTime = millis();
+    unsigned long elapsedTime = currentTime - rotBtnPressedStartTime;
+
+    if (!rotBtnDown && isDown)
+    {
+        if (elapsedTime <= 500 && elapsedTime != 0) 
+        {
+            dbClk = true;
+        }
+        rotBtnPressedStartTime = currentTime;
+    }
+    if (rotBtnDown)
+    {
+        if (elapsedTime >= 800)
+        {
+            longPress = true;
+        }
+    }
+    rotBtnDown = isDown;
+    rotBtnLongPress = longPress;
+    rotBtnDbClk = dbClk;
 }
 
 int readValue(int pos, int min, int max)
@@ -153,22 +204,9 @@ int readValue(int pos, int min, int max)
 
 void loop()
 {
-    readRotVal();
-    if (backLightRefreshTimeMS > 0)
-    {
-        long currentMS = millis();
-        long diffMS = currentMS - backLightRefreshTimeMS;
-        if (diffMS >= BACKLIGHT_TURNOFF_TIME_SEC * 1000)
-        {
-            backLightRefreshTimeMS = 0;
-            lcd.noBacklight();
-        }
-    }
-    if (hasInteracted) {
-        hasInteracted = false;
-        lcd.backlight();
-        backLightRefreshTimeMS = millis();
-    }
+    trackRotValChange();
+    readRotBtn();
+    toggleBacklight();
 
     if (state == STATE_CHECK_LOCKED)
     {
@@ -207,7 +245,7 @@ void loop()
     }
     else if (state == STATE_SET_TIMER)
     { // set timer
-                        min = readValue(POS_MIN, 0, 59);
+        min = readValue(POS_MIN, 0, 59);
         sec = readValue(POS_SEC, 0, 59);
         sprintf(time, "%02d:%02d", min, sec);
 #ifdef DEBUG
@@ -228,29 +266,23 @@ void loop()
         }
         delay(20);
 
-        bool rotBtnCurrentPressed = digitalRead(rotBtnPin) == LOW;
-        if (!rotBtnPrevPressed && rotBtnCurrentPressed)
+        if (rotBtnLongPress) 
         {
-            rotBtnPressedStartTime = millis();
-        }
-        if (rotBtnPrevPressed)
+            lcd.clear();
+            lcd.noBlink();
+            // save the timer to eeprom
+            EEPROMwl.write(INDEX_CONFIGURATION_SEC, sec);
+            EEPROMwl.write(INDEX_CONFIGURATION_MIN, min);
+            state = STATE_PREPARE;
+        } 
+        else if (rotBtnDbClk)
         {
-            unsigned long currentTime = millis();
-            if (currentTime - rotBtnPressedStartTime >= 800)
-            {
-                lcd.clear();
-                lcd.noBlink();
-                // save the timer to eeprom
-                EEPROMwl.write(INDEX_CONFIGURATION_SEC, sec);
-                EEPROMwl.write(INDEX_CONFIGURATION_MIN, min);
-                state = STATE_PREPARE;
-            }
-            else
-            {
-                currentPos = 1 - currentPos;
-            }
+            state = STATE_UNLOCK;
+        } 
+        else if (rotBtnDown) 
+        {
+            currentPos = 1 - currentPos;
         }
-        rotBtnPrevPressed = rotBtnCurrentPressed;
     }
     else if (state == STATE_PREPARE)
     { // prepare
@@ -364,8 +396,7 @@ void loop()
     { // time's up
         delay(100);
 
-        int act = digitalRead(rotBtnPin);
-        if (act == LOW)
+        if (rotBtnVal == LOW)
         {
             lcd.clear();
             lcd.setCursor(0, 0);
@@ -412,8 +443,7 @@ void loop()
     else if (state == STATE_RETRY)
     {
         delay(100);
-        int act = digitalRead(rotBtnPin);
-        if (act == LOW)
+        if (rotBtnVal == LOW)
         {
             lcd.clear();
             lcd.setCursor(0, 0);
